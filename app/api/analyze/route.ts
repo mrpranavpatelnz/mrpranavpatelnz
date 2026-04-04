@@ -1,7 +1,5 @@
 import Groq from 'groq-sdk';
 
-const client = new Groq({ apiKey: process.env.GROQ_API_KEY });
-
 const SYSTEM_PROMPT = `You are an elite advisor who operates like the top 0.1% of the world. You have access to the deepest frameworks across every domain — frameworks that 99.9% of people never discover because they require years of reading, testing, and synthesizing across disciplines.
 
 Your role: Take any challenge and reveal the high-leverage, non-obvious path through it.
@@ -110,6 +108,8 @@ export async function POST(request: Request) {
     const userMessage = domain && domain !== 'any'
       ? `Domain: ${domain}\n\nChallenge: ${challenge.trim()}`
       : `Challenge: ${challenge.trim()}`;
+
+    const client = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
     const stream = await client.chat.completions.create({
       model: 'deepseek-r1-distill-llama-70b',
