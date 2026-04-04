@@ -398,7 +398,7 @@ export default function Home() {
         {/* Footer */}
         <div className="mt-16 text-center">
           <p className="text-zinc-700 text-xs">
-            Powered by Claude claude-opus-4-6 with adaptive thinking · Built for Pranav
+            Powered by DeepSeek R1 on Groq · Built for Pranav
           </p>
         </div>
 

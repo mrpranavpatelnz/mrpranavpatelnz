@@ -1,42 +1,6 @@
-import Anthropic from '@anthropic-ai/sdk';
-import fs from 'fs';
-import { ProxyAgent, fetch as undiciFetch } from 'undici';
+import Groq from 'groq-sdk';
 
-function buildFetch() {
-  const proxyUrl = process.env.HTTPS_PROXY || process.env.https_proxy;
-  if (!proxyUrl) return undefined;
-  const agent = new ProxyAgent(proxyUrl);
-  // Return a fetch compatible with the Anthropic SDK signature
-  return (url: RequestInfo | URL, opts?: RequestInit) =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    undiciFetch(url as string, { ...(opts as any), dispatcher: agent }) as Promise<Response>;
-}
-
-function getClient(): Anthropic {
-  const customFetch = buildFetch();
-  const baseOptions = customFetch ? { fetch: customFetch } : {};
-
-  // Standard API key (from .env.local or environment)
-  if (process.env.ANTHROPIC_API_KEY) {
-    return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, ...baseOptions });
-  }
-  // Claude Code session ingress token (Bearer auth)
-  const tokenFile = process.env.CLAUDE_SESSION_INGRESS_TOKEN_FILE;
-  if (tokenFile) {
-    try {
-      const token = fs.readFileSync(tokenFile, 'utf-8').trim();
-      if (token) {
-        return new Anthropic({ authToken: token, ...baseOptions });
-      }
-    } catch {
-      // fall through
-    }
-  }
-  // Fallback — let SDK error naturally
-  return new Anthropic(baseOptions);
-}
-
-const client = getClient();
+const client = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 const SYSTEM_PROMPT = `You are an elite advisor who operates like the top 0.1% of the world. You have access to the deepest frameworks across every domain — frameworks that 99.9% of people never discover because they require years of reading, testing, and synthesizing across disciplines.
 
@@ -147,25 +111,69 @@ export async function POST(request: Request) {
       ? `Domain: ${domain}\n\nChallenge: ${challenge.trim()}`
       : `Challenge: ${challenge.trim()}`;
 
-    const stream = client.messages.stream({
-      model: 'claude-opus-4-6',
+    const stream = await client.chat.completions.create({
+      model: 'deepseek-r1-distill-llama-70b',
       max_tokens: 8000,
-      thinking: { type: 'adaptive' },
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userMessage }],
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: userMessage },
+      ],
+      stream: true,
     });
 
     const encoder = new TextEncoder();
+    let inThinkBlock = false;
+    let thinkBuffer = '';
 
     const readableStream = new ReadableStream({
       async start(controller) {
         try {
-          for await (const event of stream) {
-            if (
-              event.type === 'content_block_delta' &&
-              event.delta.type === 'text_delta'
-            ) {
-              controller.enqueue(encoder.encode(event.delta.text));
+          for await (const chunk of stream) {
+            const text = chunk.choices[0]?.delta?.content ?? '';
+            if (!text) continue;
+
+            // Strip <think>...</think> reasoning blocks from DeepSeek R1
+            let combined = thinkBuffer + text;
+            thinkBuffer = '';
+
+            let output = '';
+            let i = 0;
+
+            while (i < combined.length) {
+              if (!inThinkBlock) {
+                const start = combined.indexOf('<think>', i);
+                if (start === -1) {
+                  // Check for partial tag at end
+                  const partial = findPartialTag(combined, i, '<think>');
+                  if (partial !== -1) {
+                    output += combined.slice(i, partial);
+                    thinkBuffer = combined.slice(partial);
+                    i = combined.length;
+                  } else {
+                    output += combined.slice(i);
+                    i = combined.length;
+                  }
+                } else {
+                  output += combined.slice(i, start);
+                  inThinkBlock = true;
+                  i = start + '<think>'.length;
+                }
+              } else {
+                const end = combined.indexOf('</think>', i);
+                if (end === -1) {
+                  // Still inside think block, discard rest
+                  i = combined.length;
+                } else {
+                  inThinkBlock = false;
+                  i = end + '</think>'.length;
+                  // Skip leading newline after closing tag
+                  if (combined[i] === '\n') i++;
+                }
+              }
+            }
+
+            if (output) {
+              controller.enqueue(encoder.encode(output));
             }
           }
           controller.close();
@@ -188,4 +196,15 @@ export async function POST(request: Request) {
       headers: { 'Content-Type': 'application/json' },
     });
   }
+}
+
+// Find start of a partial tag match at the end of a string
+function findPartialTag(str: string, from: number, tag: string): number {
+  for (let len = tag.length - 1; len >= 1; len--) {
+    const partial = tag.slice(0, len);
+    if (str.endsWith(partial, str.length) && str.indexOf(partial, from) === str.length - len) {
+      return str.length - len;
+    }
+  }
+  return -1;
 }
