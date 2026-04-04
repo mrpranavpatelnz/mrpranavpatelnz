@@ -191,7 +191,8 @@ export async function POST(request: Request) {
     });
   } catch (err) {
     console.error('API error:', err);
-    return new Response(JSON.stringify({ error: 'Internal server error' }), {
+    const message = err instanceof Error ? err.message : 'Internal server error';
+    return new Response(JSON.stringify({ error: message }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     });
